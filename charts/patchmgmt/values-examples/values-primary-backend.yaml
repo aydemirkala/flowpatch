@@ -1,0 +1,226 @@
+# Example: Primary Backend Configuration with built-in PostgreSQL
+# The primary is the default backend: it owns users/config, serves the frontend,
+# and aggregates remote (secondary) backends. Deploy one primary, then add remotes
+# with values-remote-backend.yaml.
+
+nameOverride: ""
+fullnameOverride: "patchmgmt"
+namespace: "patchmgmt"
+imagePullSecrets: []
+
+api:
+  image: "registry.example.com/yourorg/patchmgmt-api:v4.0.45"
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 8000
+  env:
+    kubeInCluster: true
+    
+    # ⚠️ DO NOT SET databaseUrl when using built-in PostgreSQL!
+    # The DATABASE_URL is auto-generated from postgresql.* settings below
+    databaseUrl: ""
+    
+    sourcesFile: "/app/sources.txt"
+    refreshIntervalSeconds: 0
+    logDir: "/logs"
+    logMaxSizeMb: 100
+    logBackupCount: 5
+    
+    # Backend Identity - PRIMARY BACKEND
+    backendName: "primary-backend"                # Unique name for this backend
+    backendPlatform: "main-cluster"               # Platform/cluster label shown in the UI
+    backendUrl: "https://patchmgmt-api.apps.example.com"  # This backend's reachable URL
+    backendIsDefault: "true"                      # true = auto-approved primary (default backend)
+    backendAuthToken: ""                          # Not used by the primary
+
+    # ════════════════════════════════════════════════════════════════════════
+    # FEDERATION — primary backend
+    # ════════════════════════════════════════════════════════════════════════
+
+    backendType: "primary"                        # primary = owns users/config, aggregates remotes
+
+    # The following are only used by secondary backends; leave empty on the primary.
+    primaryBackendUrl: ""
+    primaryBackendVerifyTls: ""
+    registrationToken: ""
+    
+    # ════════════════════════════════════════════════════════════════════════
+    # DO NOT CONFIGURE THESE - They will be fetched from primary backend
+    # ════════════════════════════════════════════════════════════════════════
+    
+    # Twistlock - fetched from primary backend via federation
+    twistlockUrl: ""
+    twistlockUser: ""
+    twistlockUserPassword: ""
+    twistlockVerify: true
+    
+    # EOL Integration - fetched from primary backend
+    eolApiUrl: ""
+    
+    # SMTP - fetched from primary backend (only primary sends emails)
+    smtpServer: ""
+    smtpPort: "587"
+    smtpFromEmail: ""
+    smtpUsername: ""
+    smtpPassword: ""
+    smtpUseTls: "true"
+    smtpSchedule: ""
+    
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  
+  # FluentBit Sidecar — enable to ship logs to Elasticsearch
+  fluentbit:
+    enabled: false
+    image: "fluent/fluent-bit:5.0.7"
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi
+    config:
+      conf: |
+        [SERVICE]
+            Flush 1
+            Daemon off
+            Parsers_File parsers.conf
+            Log_Level info
+            HTTP_Server Off
+
+        [INPUT]
+            Name tail
+            Path /logs/api.log
+            Parser json
+            Tag primary-backend
+            Mem_Buf_Limit 100MB
+            Skip_Long_Lines Off
+            Refresh_Interval 10
+            Buffer_Max_Size 2MB
+            Buffer_Chunk_Size 1MB
+
+        [OUTPUT]
+            Name es
+            Match primary-backend
+            Host elastic.example.com
+            Port 443
+            HTTP_User fluentbit
+            HTTP_Passwd xxxxxxx
+            Logstash_Prefix patchmgmt
+            Logstash_Format On
+            Logstash_DateFormat %Y.%m
+            Buffer_Size 2048K
+            tls on
+            Generate_ID on
+            Trace_Output off
+            Trace_Error off
+            Time_Key @timestamp
+            Include_Tag_Key On
+            Retry_Limit 5
+            Suppress_Type_Name On
+            Replace_Dots On
+      parsers: |
+        [PARSER]
+            Name        json
+            Format      json
+            Time_Key    ts
+            Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+
+frontend:
+  enabled: true
+  image: "registry.example.com/yourorg/patchmgmt-frontend:v4.0.45"
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 8080
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "1024Mi"
+      cpu: "1000m"
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+rbac:
+  create: true
+  clusterScope: true  # true = can monitor all namespaces in this cluster
+
+route:
+  enabled: true  # ⚠️ REQUIRED for remote backends - primary needs to reach this backend
+  tls:
+    termination: edge
+
+# ════════════════════════════════════════════════════════════════════════════
+# BUILT-IN POSTGRESQL (for this remote backend)
+# ════════════════════════════════════════════════════════════════════════════
+# Uses official postgres:15-alpine image (NOT Bitnami)
+# Each remote backend gets its own separate database
+
+postgresql:
+  enabled: true                      # ← Enable built-in PostgreSQL
+  image: "postgres:15-alpine"        # Official PostgreSQL image
+  
+  # Database credentials (stored in Kubernetes Secret)
+  auth:
+    database: "patchmanagement"      # Database name
+    username: "app_patchmgmt"            # Database user
+    password: "CHANGE_ME"  # ⚠️ CHANGE THIS! Stored in Secret
+  
+  # Persistent storage
+  persistence:
+    enabled: true                    # Enable PVC for data persistence
+    size: "5Gi"                      # Storage size (smaller for remote backends)
+    storageClass: ""                 # Leave empty for default, or specify class
+  
+  # Resource limits
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "1024Mi"
+      cpu: "1000m"
+  
+  # Pod scheduling
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ════════════════════════════════════════════════════════════════════════════
+# TRIVY SERVER (container image vulnerability scanner)
+# ════════════════════════════════════════════════════════════════════════════
+# Only enable on the PRIMARY backend. Secondary backends get results via federation.
+trivy:
+  enabled: true
+  image: "ghcr.io/aquasecurity/trivy:0.71.0"
+  replicaCount: 1
+  service:
+    port: 4954
+  persistence:
+    enabled: true
+    size: "5Gi"
+    storageClass: ""
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "200m"
+    limits:
+      memory: "2Gi"
+      cpu: "1000m"
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}

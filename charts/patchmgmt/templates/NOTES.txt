@@ -1,0 +1,31 @@
+Thanks for installing patchmgmt!
+
+Namespace: {{ .Values.namespace }}
+
+API service:
+  name: {{ include "patchmgmt.fullname" . }}-api
+  port: {{ .Values.api.service.port }}
+
+{{- if .Values.postgresql.enabled }}
+PostgreSQL (built-in):
+  service: {{ include "patchmgmt.fullname" . }}-postgresql:5432
+  database: {{ .Values.postgresql.auth.database }}
+  user: {{ .Values.postgresql.auth.username }}
+  secret: {{ include "patchmgmt.fullname" . }}-postgresql
+  {{- if .Values.postgresql.persistence.enabled }}
+  storage: {{ .Values.postgresql.persistence.size }} (persistent)
+  {{- else }}
+  storage: emptyDir (⚠️ data will be lost on restart!)
+  {{- end }}
+{{- end }}
+
+{{- if .Values.route.enabled }}
+OpenShift Routes created:
+  API: route/{{ include "patchmgmt.fullname" . }}-api
+  {{- if .Values.frontend.enabled }}
+  Frontend: route/{{ include "patchmgmt.fullname" . }}-frontend
+  {{- end }}
+{{- else }}
+No Routes created. Use `oc expose` or set `route.enabled=true`.
+{{- end }}
+

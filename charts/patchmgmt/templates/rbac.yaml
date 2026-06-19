@@ -1,0 +1,171 @@
+{{- if .Values.rbac.create }}
+{{- if not .Values.rbac.clusterScope }}
+# Namespace-scoped RBAC (only monitors resources in a single namespace)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "patchmgmt.fullname" . }}-reader
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "patchmgmt.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  # watch: used by Kube Watch API (ENABLE_KUBE_WATCH) for real-time sync
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch"]
+  # Kube Watch: detect new namespace creation
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  # Compare feature: Related objects for comparison
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["services", "configmaps", "secrets", "persistentvolumeclaims"]
+    verbs: ["get", "list"]
+  - apiGroups: ["route.openshift.io"]
+    resources: ["routes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "patchmgmt.fullname" . }}-updater
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "patchmgmt.labels" . | nindent 4 }}
+rules:
+  # Required for Image Update feature to patch deployments/statefulsets/daemonsets
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    verbs: ["get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "patchmgmt.fullname" . }}-reader-binding
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "patchmgmt.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "patchmgmt.fullname" . }}
+    namespace: {{ .Values.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "patchmgmt.fullname" . }}-reader
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "patchmgmt.fullname" . }}-updater-binding
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "patchmgmt.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "patchmgmt.fullname" . }}
+    namespace: {{ .Values.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "patchmgmt.fullname" . }}-updater
+{{- else }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "patchmgmt.fullname" . }}-reader
+  labels:
+    {{- include "patchmgmt.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  # watch: used by Kube Watch API (ENABLE_KUBE_WATCH) for real-time sync
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch"]
+  # Kube Watch: detect new namespace creation
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  # Compare feature: Related objects for comparison
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["services", "configmaps", "secrets", "persistentvolumeclaims"]
+    verbs: ["get", "list"]
+  - apiGroups: ["route.openshift.io"]
+    resources: ["routes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "patchmgmt.fullname" . }}-updater
+  labels:
+    {{- include "patchmgmt.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "patchmgmt.fullname" . }}-reader-binding
+  labels:
+    {{- include "patchmgmt.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "patchmgmt.fullname" . }}
+    namespace: {{ .Values.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "patchmgmt.fullname" . }}-reader
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "patchmgmt.fullname" . }}-updater-binding
+  labels:
+    {{- include "patchmgmt.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "patchmgmt.fullname" . }}
+    namespace: {{ .Values.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "patchmgmt.fullname" . }}-updater
+{{- end }}
+{{- end }}
+

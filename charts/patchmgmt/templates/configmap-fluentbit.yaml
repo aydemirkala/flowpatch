@@ -1,0 +1,29 @@
+{{- if .Values.api.fluentbit.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "patchmgmt.fullname" . }}-fluentbit-api
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "patchmgmt.labels" . | nindent 4 }}
+data:
+  fluent-bit.conf: |
+{{ .Values.api.fluentbit.config.conf | indent 4 }}
+  parsers.conf: |
+{{ .Values.api.fluentbit.config.parsers | indent 4 }}
+{{- end }}
+---
+{{- if and .Values.frontend.enabled .Values.frontend.fluentbit.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "patchmgmt.fullname" . }}-fluentbit-frontend
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "patchmgmt.labels" . | nindent 4 }}
+data:
+  fluent-bit.conf: |
+{{ .Values.frontend.fluentbit.config.conf | indent 4 }}
+  parsers.conf: |
+{{ .Values.frontend.fluentbit.config.parsers | indent 4 }}
+{{- end }}

@@ -1,0 +1,42 @@
+{{- if .Values.route.enabled }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "patchmgmt.fullname" . }}-api
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "patchmgmt.labels" . | nindent 4 }}
+  annotations:
+    haproxy.router.openshift.io/timeout: 3000s
+    haproxy.router.openshift.io/proxy-body-size: "50m"
+spec:
+  to:
+    kind: Service
+    name: {{ include "patchmgmt.fullname" . }}-api
+  port:
+    targetPort: http
+  tls:
+    termination: {{ .Values.route.tls.termination }}
+---
+{{- if .Values.frontend.enabled }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "patchmgmt.fullname" . }}-frontend
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "patchmgmt.labels" . | nindent 4 }}
+  annotations:
+    haproxy.router.openshift.io/timeout: 3000s
+    haproxy.router.openshift.io/proxy-body-size: "50m"
+spec:
+  to:
+    kind: Service
+    name: {{ include "patchmgmt.fullname" . }}-frontend
+  port:
+    targetPort: http
+  tls:
+    termination: {{ .Values.route.tls.termination }}
+{{- end }}
+{{- end }}
+

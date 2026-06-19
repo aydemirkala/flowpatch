@@ -1,0 +1,124 @@
+{{- if .Values.trivy.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "patchmgmt.fullname" . }}-trivy-cache
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "patchmgmt.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.trivy.persistence.storageClass }}
+  storageClassName: {{ .Values.trivy.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.trivy.persistence.size }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "patchmgmt.fullname" . }}-trivy-cli-cache
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "patchmgmt.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.trivy.persistence.storageClass }}
+  storageClassName: {{ .Values.trivy.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.trivy.persistence.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "patchmgmt.fullname" . }}-trivy
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "patchmgmt.labels" . | nindent 4 }}
+    app.kubernetes.io/component: trivy
+spec:
+  replicas: {{ .Values.trivy.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "patchmgmt.fullname" . }}-trivy
+  template:
+    metadata:
+      labels:
+        app: {{ include "patchmgmt.fullname" . }}-trivy
+        {{- include "patchmgmt.labels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: trivy
+          image: {{ .Values.trivy.image | quote }}
+          args:
+            - server
+            - --listen
+            - "0.0.0.0:{{ .Values.trivy.service.port }}"
+            - --cache-dir
+            - /tmp/trivy-cache
+          ports:
+            - containerPort: {{ .Values.trivy.service.port }}
+              protocol: TCP
+          volumeMounts:
+            - name: cache
+              mountPath: /tmp/trivy-cache
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.trivy.service.port }}
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.trivy.service.port }}
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.trivy.resources | nindent 12 }}
+      {{- with .Values.trivy.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.trivy.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.trivy.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: cache
+          {{- if .Values.trivy.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "patchmgmt.fullname" . }}-trivy-cache
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "patchmgmt.fullname" . }}-trivy
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "patchmgmt.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: {{ include "patchmgmt.fullname" . }}-trivy
+  ports:
+    - name: http
+      port: {{ .Values.trivy.service.port }}
+      targetPort: {{ .Values.trivy.service.port }}
+      protocol: TCP
+{{- end }}

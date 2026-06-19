@@ -1,0 +1,127 @@
+{{- if and .Values.postgresql.enabled .Values.postgresql.backup.enabled }}
+# PostgreSQL Backup PVC
+# Holds compressed pg_dump (custom format) artifacts on a separate volume,
+# decoupled from the database PVC so an accidental DB deletion does not
+# affect the backups.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "patchmgmt.fullname" . }}-postgresql-backups
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "patchmgmt.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql-backup
+spec:
+  accessModes:
+    - {{ .Values.postgresql.backup.pvc.accessMode | default "ReadWriteOnce" }}
+  resources:
+    requests:
+      storage: {{ .Values.postgresql.backup.pvc.size | default "20Gi" }}
+  {{- if .Values.postgresql.backup.pvc.storageClass }}
+  storageClassName: {{ .Values.postgresql.backup.pvc.storageClass | quote }}
+  {{- end }}
+---
+# PostgreSQL Backup CronJob
+# Runs pg_dump on the in-cluster PostgreSQL on the configured schedule.
+# Schedule should be set to fire BEFORE the application's auto-sync window
+# so that the snapshot reflects the pre-sync (known-good) state.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "patchmgmt.fullname" . }}-postgresql-backup
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "patchmgmt.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql-backup
+spec:
+  schedule: {{ .Values.postgresql.backup.schedule | quote }}
+  concurrencyPolicy: {{ .Values.postgresql.backup.concurrencyPolicy | default "Forbid" }}
+  startingDeadlineSeconds: {{ .Values.postgresql.backup.startingDeadlineSeconds | default 3600 }}
+  successfulJobsHistoryLimit: {{ .Values.postgresql.backup.successfulJobsHistoryLimit | default 3 }}
+  failedJobsHistoryLimit: {{ .Values.postgresql.backup.failedJobsHistoryLimit | default 3 }}
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 604800   # Clean up Job objects after 7 days
+      template:
+        metadata:
+          labels:
+            {{- include "patchmgmt.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: postgresql-backup
+        spec:
+          restartPolicy: OnFailure
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: backup
+              image: {{ default .Values.postgresql.image .Values.postgresql.backup.image | quote }}
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: PGHOST
+                  value: {{ include "patchmgmt.fullname" . }}-postgresql
+                - name: PGPORT
+                  value: "5432"
+                - name: RETENTION_DAYS
+                  value: {{ .Values.postgresql.backup.retentionDays | default 14 | quote }}
+                - name: RELEASE_NAME
+                  value: {{ .Release.Name | quote }}
+              envFrom:
+                - secretRef:
+                    name: {{ include "patchmgmt.fullname" . }}-postgresql
+              {{- with .Values.postgresql.backup.resources }}
+              resources:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -euo pipefail
+                  TS=$(date -u +%Y%m%d-%H%M%SZ)
+                  DUMP="/backups/dump-${RELEASE_NAME}-${TS}.pgdump"
+
+                  echo "[backup] starting pg_dump host=${PGHOST} db=${POSTGRES_DB} file=${DUMP}"
+                  PGUSER="${POSTGRES_USER}" PGPASSWORD="${POSTGRES_PASSWORD}" \
+                  pg_dump \
+                    --host="${PGHOST}" \
+                    --port="${PGPORT}" \
+                    --dbname="${POSTGRES_DB}" \
+                    --format=custom \
+                    --compress=6 \
+                    --no-owner \
+                    --no-acl \
+                    --file="${DUMP}"
+
+                  ls -lh "${DUMP}"
+                  sha256sum "${DUMP}" > "${DUMP}.sha256"
+                  echo "[backup] sha256: $(cat ${DUMP}.sha256)"
+
+                  echo "[backup] retention: removing dumps older than ${RETENTION_DAYS} days"
+                  find /backups -maxdepth 1 -name 'dump-*.pgdump'        -mtime +${RETENTION_DAYS} -print -delete || true
+                  find /backups -maxdepth 1 -name 'dump-*.pgdump.sha256' -mtime +${RETENTION_DAYS} -print -delete || true
+
+                  echo "[backup] inventory:"
+                  ls -lh /backups/ || true
+                  echo "[backup] done"
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: {{ include "patchmgmt.fullname" . }}-postgresql-backups
+          {{- with .Values.postgresql.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.postgresql.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.postgresql.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

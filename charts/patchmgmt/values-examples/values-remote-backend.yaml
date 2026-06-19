@@ -1,0 +1,158 @@
+nameOverride: ""
+fullnameOverride: "patchmgmt"
+namespace: patchmgmt
+imagePullSecrets: []
+
+api:
+  image: "registry.example.com/yourorg/patchmgmt-api:v4.0.45"
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 8000
+  env:
+    kubeInCluster: true
+    
+    # Leave databaseUrl empty — it is auto-generated from the built-in PostgreSQL below
+    databaseUrl: ""
+    
+    sourcesFile: "/app/sources.txt"
+    refreshIntervalSeconds: 0
+    logDir: "/logs"
+    logMaxSizeMb: 100
+    logBackupCount: 5
+    
+    # Backend Identity
+    backendName: "remote-backend"
+    backendPlatform: "remote-cluster"
+    backendUrl: "https://patchmgmt-api-remote.apps.example.com"
+    backendIsDefault: "false"
+    backendAuthToken: ""
+    
+    # Federation
+    backendType: "secondary"
+    primaryBackendUrl: "https://patchmgmt-api.apps.example.com"
+    primaryBackendVerifyTls: "false"
+    registrationToken: "<registration-token-from-admin-ui>"
+    
+    # These are fetched from the primary via federation — leave empty
+    twistlockUrl: ""
+    twistlockUser: ""
+    twistlockUserPassword: ""
+    twistlockVerify: true
+    eolApiUrl: ""
+    smtpServer: ""
+    smtpPort: "587"
+    smtpFromEmail: ""
+    smtpUsername: ""
+    smtpPassword: ""
+    smtpUseTls: "true"
+    smtpSchedule: ""
+
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  
+  # FluentBit Sidecar — enable to ship logs to Elasticsearch
+  fluentbit:
+    enabled: false
+    image: "fluent/fluent-bit:5.0.7"
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi
+    config:
+      conf: |
+        [SERVICE]
+            Flush 1
+            Daemon off
+            Parsers_File parsers.conf
+            Log_Level info
+            HTTP_Server Off
+
+        [INPUT]
+            Name tail
+            Path /logs/api.log
+            Parser json
+            Tag remote-backend
+            Mem_Buf_Limit 100MB
+            Skip_Long_Lines Off
+            Refresh_Interval 10
+            Buffer_Max_Size 2MB
+            Buffer_Chunk_Size 1MB
+
+        [OUTPUT]
+            Name es
+            Match remote-backend
+            Host elastic.example.com
+            Port 443
+            HTTP_User fluentbit
+            HTTP_Passwd xxxxxxx
+            Logstash_Prefix patchmgmt
+            Logstash_Format On
+            Logstash_DateFormat %Y.%m
+            Buffer_Size 2048K
+            tls on
+            Generate_ID on
+            Trace_Output off
+            Trace_Error off
+            Time_Key @timestamp
+            Include_Tag_Key On
+            Retry_Limit 5
+            Suppress_Type_Name On
+            Replace_Dots On
+      parsers: |
+        [PARSER]
+            Name        json
+            Format      json
+            Time_Key    ts
+            Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+
+frontend:
+  enabled: false    # Frontend runs on the primary backend only
+
+rbac:
+  create: true
+  clusterScope: true
+
+route:
+  enabled: true
+  tls:
+    termination: edge
+
+# Built-in PostgreSQL
+postgresql:
+  enabled: true
+  image: "postgres:15-alpine"
+  auth:
+    database: "patchmanagement"
+    username: "app_patchmgmt"
+    password: "CHANGE_ME"    # set a strong password
+  persistence:
+    enabled: true
+    size: "10Gi"
+    storageClass: ""
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "1024Mi"
+      cpu: "1000m"
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Trivy - disabled on secondary backends (results fetched from primary via federation)
+trivy:
+  enabled: false

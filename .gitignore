@@ -1,0 +1,20 @@
+.DS_Store
+charts/patchmgmt/values-examples/backup/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node / frontend build
+node_modules/
+frontend/dist/
+dist/
+build/
+
+# Local secrets / per-deployment values (see docs/INSTALLATION.md §3)
+.env
+my-*.yaml
+*.local.yaml

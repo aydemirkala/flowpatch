@@ -1,0 +1,324 @@
+nameOverride: ""
+fullnameOverride: ""
+namespace: patchmgmt
+imagePullSecrets: []
+
+api:
+  image: "registry.example.com/yourorg/patchmgmt-api:v2"
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 8000
+  env:
+    kubeInCluster: true
+    databaseUrl: "postgresql+psycopg2://postgres:CHANGE_ME@postgres-host:5432/patchmanagement"
+    sourcesFile: "/app/sources.txt"
+    refreshIntervalSeconds: 0
+    logDir: "/logs"
+    # Real-time Kubernetes watch: catch image/spec changes instantly (complements
+    # the scheduled sync). Each backend watches its own cluster via in-cluster API.
+    enableKubeWatch: true
+    kubeWatchNamespace: ""         # empty = cluster-wide; set a namespace to scope
+
+    # JWT Secret for token signing/verification (REQUIRED for security)
+    # Generate a strong random secret: openssl rand -base64 32
+    jwtSecret: ""  # REQUIRED: set a strong secret (min 32 chars), e.g. `openssl rand -base64 32`
+    
+    # Backend Identity & Authentication (for multi-backend support)
+    # For default/local backend, set isDefault=true (auto-approved)
+    # For remote backends, get token from Admin UI after adding backend entry
+    backendName: "default-backend"           # Unique name for this backend
+    backendPlatform: "default-platform"      # Platform name (e.g., "test-openshift", "prod-k8s")
+    backendUrl: "http://localhost:8000"      # This backend's URL
+    backendIsDefault: "true"                 # "true" = auto-approved, "false" = requires token
+    backendAuthToken: ""                     # Leave empty for default, set token for remote backends
+    
+    # Federation Support (for separate database deployments)
+    # Set backendType to "primary" for the main backend (manages users/config)
+    # Set backendType to "secondary" for additional backends (own database)
+    backendType: "primary"                   # "primary" or "secondary"
+    primaryBackendUrl: ""                    # Required for secondary backends (e.g., "https://primary-api.example.com")
+    primaryBackendVerifyTls: "false"         # Set to "true" to verify TLS cert (default: false = skip like curl -k)
+    registrationToken: ""                    # Required for secondary backends (get from admin UI)
+    
+    # Twistlock / Prisma Cloud integration (can be configured via Admin UI)
+    twistlockUrl: ""
+    twistlockUser: ""
+    # When provided, rendered into a Secret and exposed as env TWISTLOCK_USER_PASSWORD
+    twistlockUserPassword: ""
+    # Whether to verify TLS when calling Twistlock (string true/false)
+    twistlockVerify: true
+    
+    # EOL Integration (can be configured via Admin UI)
+    # Leave empty to use default: https://endoflife.date
+    eolApiUrl: ""
+    
+    # SMTP Email Integration (can be configured via Admin UI)
+    # Leave empty to configure via UI, or set here for initial config
+    smtpServer: ""
+    smtpPort: "587"
+    smtpFromEmail: ""
+    smtpUsername: ""
+    smtpPassword: ""          # Rendered into Secret if provided
+    smtpUseTls: "true"
+    smtpSchedule: ""          # Cron expression for scheduled reports (e.g., "0 8 * * 1")
+    
+    # Security Status Thresholds (Risk Factor / Critical count based coloring)
+    # RED: Risk Factor > securityRedRiskFactor OR Critical > securityRedCritical
+    # ORANGE: Risk Factor between securityOrangeRiskFactorMin and Max AND Critical <= securityOrangeCritical
+    # GREEN: Risk Factor < securityGreenRiskFactor AND Critical <= securityGreenCritical
+    securityRedRiskFactor: 10        # RF > 10 = RED
+    securityRedCritical: 0           # Critical > 0 = RED
+    securityOrangeRiskFactorMin: 5   # RF >= 5 = ORANGE (if not RED)
+    securityOrangeRiskFactorMax: 10  # RF <= 10 = ORANGE (if not RED)
+    securityOrangeCritical: 0        # Critical must be 0 for ORANGE
+    securityGreenRiskFactor: 5       # RF < 5 = GREEN
+    securityGreenCritical: 0         # Critical must be 0 for GREEN
+    
+    # Trivy Scanner Integration
+    # Only needed on the primary backend. Secondary backends can set trivy_mode=primary.
+    trivyUrl: ""                       # e.g. "http://patchmgmt-trivy:4954" (set after enabling trivy below)
+    trivySkipTlsVerify: "true"
+
+    # Deployment-specific registry / manifest handling (all optional; empty = disabled)
+    # If your private registry proxies Docker Hub under a path prefix, set the host so
+    # version lookups resolve against docker.io (e.g. "harbor.mycorp.com").
+    privateRegistryHost: ""
+    registryDockerhubPrefixes: "docker-proxy/"   # comma-separated repo prefixes that mirror Docker Hub
+    # Extra annotation key prefixes to strip from cached manifests in Compare
+    # (comma-separated), e.g. "mycorp.com/". Empty strips only the built-in standard ones.
+    manifestStripAnnotationPrefixes: ""
+    
+    # Latest Version Check Configuration
+    # Determines how secondary backends fetch latest version info from container registries
+    # "local" = each backend fetches directly (requires network access to registries)
+    # "primary" = secondary backends request from primary (useful when secondary has no internet)
+    latestVersionCheckMode: "local"  # "local" or "primary"
+    latestVersionCacheHours: 12      # Cache duration in hours (0-24, 0 = no cache)
+    
+    # Log Rotation Settings
+    logMaxSizeMb: 100     # Max size per log file in MB before rotation
+    logBackupCount: 5     # Number of rotated backup files to keep
+    
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  
+  # FluentBit Sidecar for API logs (JSON format, tail input)
+  # Enable to ship backend logs to Elasticsearch or other destinations
+  fluentbit:
+    enabled: false
+    image: "fluent/fluent-bit:5.0.7"
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi
+    config:
+      # Full fluent-bit.conf — edit to match your environment
+      conf: |
+        [SERVICE]
+            Flush 1
+            Daemon off
+            Parsers_File parsers.conf
+            Log_Level info
+            HTTP_Server Off
+
+        [INPUT]
+            Name tail
+            Path /logs/api.log
+            Parser json
+            Tag patchmgmt-backend
+            Mem_Buf_Limit 100MB
+            Skip_Long_Lines Off
+            Refresh_Interval 10
+            Buffer_Max_Size 2MB
+            Buffer_Chunk_Size 1MB
+
+        [OUTPUT]
+            Name es
+            Match patchmgmt-backend
+            Host elastic.example.com
+            Port 443
+            HTTP_User fluentbit
+            HTTP_Passwd xxxxxxx
+            Logstash_Prefix patchmgmt
+            Logstash_Format On
+            Logstash_DateFormat %Y.%m
+            Buffer_Size 2048K
+            tls on
+            Generate_ID on
+            Trace_Output off
+            Trace_Error off
+            Time_Key @timestamp
+            Include_Tag_Key On
+            Retry_Limit 5
+            Suppress_Type_Name On
+            Replace_Dots On
+      parsers: |
+        [PARSER]
+            Name        json
+            Format      json
+            Time_Key    ts
+            Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+
+frontend:
+  enabled: true
+  image: "registry.example.com/yourorg/patchmgmt-frontend:v2"
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 8080
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  
+  # FluentBit Sidecar for Nginx access logs
+  # Enable to ship frontend access logs to Elasticsearch or other destinations
+  fluentbit:
+    enabled: false
+    image: "fluent/fluent-bit:5.0.7"
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi
+    config:
+      # Full fluent-bit.conf — edit to match your environment
+      conf: |
+        [SERVICE]
+            Flush 1
+            Daemon off
+            Parsers_File parsers.conf
+            Log_Level info
+            HTTP_Server Off
+
+        [INPUT]
+            Name tail
+            Path /var/log/nginx/access.log
+            Parser nginx
+            Tag patchmgmt-frontend
+            Mem_Buf_Limit 100MB
+            Skip_Long_Lines Off
+            Refresh_Interval 10
+            Buffer_Max_Size 2MB
+            Buffer_Chunk_Size 1MB
+
+        [OUTPUT]
+            Name es
+            Match patchmgmt-frontend
+            Host elastic.example.com
+            Port 443
+            HTTP_User fluentbit
+            HTTP_Passwd xxxxxxx
+            Logstash_Prefix patchmgmt-frontend
+            Logstash_Format On
+            Logstash_DateFormat %Y.%m
+            Buffer_Size 2048K
+            tls on
+            Generate_ID on
+            Trace_Output off
+            Trace_Error off
+            Time_Key @timestamp
+            Include_Tag_Key On
+            Retry_Limit 5
+            Suppress_Type_Name On
+            Replace_Dots On
+      parsers: |
+        [PARSER]
+            Name        nginx
+            Format      regex
+            Regex       ^(?<remote>[^ ]*) (?<host>[^ ]*) (?<user>[^ ]*) \[(?<time>[^\]]*)\] "(?<method>\S+)(?: +(?<path>[^\"]*?)(?: +\S*)?)?" (?<code>[^ ]*) (?<size>[^ ]*)(?: "(?<referer>[^\"]*)" "(?<agent>[^\"]*)")?$
+            Time_Key    time
+            Time_Format %d/%b/%Y:%H:%M:%S %z
+
+rbac:
+  create: true
+  clusterScope: true
+
+route:
+  enabled: true
+  tls:
+    termination: edge
+
+# PostgreSQL - Simple single-server deployment (official postgres image)
+# Enable this to deploy PostgreSQL alongside the application
+postgresql:
+  enabled: false
+  image: "postgres:15-alpine"
+  # Database credentials
+  auth:
+    database: "patchmanagement"
+    username: "patchmgmt"
+    password: "changeme"         # Change this! Will be stored in Secret
+  # Storage
+  persistence:
+    enabled: true
+    size: "10Gi"
+    storageClass: ""             # Leave empty for default, or set specific class
+  # Resources
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  # Pod settings
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # Logical (pg_dump) backups written to a dedicated PVC.
+  # Restore is performed manually (kubectl exec / pg_restore); no Helm-managed restore.
+  backup:
+    enabled: false
+    schedule: "0 1 * * *"           # Daily 01:00. Set so it runs BEFORE auto-sync.
+    retentionDays: 14               # Delete dumps older than N days
+    concurrencyPolicy: Forbid       # Never run two backup jobs at the same time
+    startingDeadlineSeconds: 3600   # Tolerate up to 1h of cluster downtime
+    successfulJobsHistoryLimit: 3
+    failedJobsHistoryLimit: 3
+    image: ""                       # Empty = use postgresql.image (guarantees pg_dump version match)
+    pvc:
+      size: "20Gi"
+      storageClass: ""              # Empty = default StorageClass
+      accessMode: ReadWriteOnce
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "50m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+
+# Trivy Server - Container image vulnerability scanner
+# Enable this to deploy Trivy Server alongside the application (only on primary backend)
+# Pin the version (keep in sync with the trivy CLI in backend/Dockerfile).
+trivy:
+  enabled: false
+  image: "ghcr.io/aquasecurity/trivy:0.71.0"
+  replicaCount: 1
+  service:
+    port: 4954
+  # Persistent cache for vulnerability database
+  persistence:
+    enabled: true
+    size: "5Gi"
+    storageClass: ""
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "200m"
+    limits:
+      memory: "2Gi"
+      cpu: "1000m"
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}

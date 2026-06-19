@@ -1,0 +1,297 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "patchmgmt.fullname" . }}-api
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "patchmgmt.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.api.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "patchmgmt.fullname" . }}-api
+  template:
+    metadata:
+      labels:
+        app: {{ include "patchmgmt.fullname" . }}-api
+        {{- include "patchmgmt.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "patchmgmt.fullname" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: api
+          image: {{ .Values.api.image | quote }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            - name: KUBE_INCLUSTER
+              value: {{ ternary "\"true\"" "\"false\"" .Values.api.env.kubeInCluster }}
+            {{- if .Values.postgresql.enabled }}
+            # Database URL from built-in PostgreSQL
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "patchmgmt.fullname" . }}-postgresql
+                  key: DATABASE_URL
+            {{- else if .Values.api.env.databaseUrl }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "patchmgmt.fullname" . }}-db
+                  key: DATABASE_URL
+            {{- end }}
+            - name: SOURCES_FILE
+              value: {{ .Values.api.env.sourcesFile | quote }}
+            - name: REFRESH_INTERVAL_SECONDS
+              value: {{ .Values.api.env.refreshIntervalSeconds | quote }}
+            - name: LOG_DIR
+              value: {{ .Values.api.env.logDir | quote }}
+            # Real-time Kubernetes watch (complements scheduled sync)
+            - name: ENABLE_KUBE_WATCH
+              value: {{ ternary "\"true\"" "\"false\"" .Values.api.env.enableKubeWatch }}
+            {{- if .Values.api.env.kubeWatchNamespace }}
+            - name: KUBE_WATCH_NAMESPACE
+              value: {{ .Values.api.env.kubeWatchNamespace | quote }}
+            {{- end }}
+            # JWT Secret for authentication (from secret if set)
+            {{- if .Values.api.env.jwtSecret }}
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "patchmgmt.fullname" . }}-jwt
+                  key: JWT_SECRET
+            {{- end }}
+            # Twistlock / Prisma Cloud
+            {{- if .Values.api.env.twistlockUrl }}
+            - name: TWISTLOCK_URL
+              value: {{ .Values.api.env.twistlockUrl | quote }}
+            {{- end }}
+            {{- if .Values.api.env.twistlockUser }}
+            - name: TWISTLOCK_USER
+              value: {{ .Values.api.env.twistlockUser | quote }}
+            {{- end }}
+            {{- if .Values.api.env.twistlockUserPassword }}
+            - name: TWISTLOCK_USER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "patchmgmt.fullname" . }}-twistlock
+                  key: TWISTLOCK_USER_PASSWORD
+            {{- end }}
+            - name: TWISTLOCK_VERIFY
+              value: {{ ternary "\"true\"" "\"false\"" .Values.api.env.twistlockVerify }}
+            # Backend Identity & Authentication
+            - name: BACKEND_NAME
+              value: {{ .Values.api.env.backendName | quote }}
+            - name: BACKEND_PLATFORM
+              value: {{ .Values.api.env.backendPlatform | quote }}
+            - name: BACKEND_URL
+              value: {{ .Values.api.env.backendUrl | quote }}
+            - name: BACKEND_IS_DEFAULT
+              value: {{ .Values.api.env.backendIsDefault | quote }}
+            {{- if .Values.api.env.skipTlsVerify }}
+            - name: BACKEND_SKIP_TLS_VERIFY
+              value: {{ ternary "\"true\"" "\"false\"" .Values.api.env.skipTlsVerify }}
+            {{- end }}
+            # Backend Auth Token - either from backendAuthToken OR registrationToken (not both)
+            {{- if .Values.api.env.registrationToken }}
+            - name: BACKEND_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "patchmgmt.fullname" . }}-registration
+                  key: BACKEND_AUTH_TOKEN
+            {{- else if .Values.api.env.backendAuthToken }}
+            - name: BACKEND_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "patchmgmt.fullname" . }}-backend-auth
+                  key: BACKEND_AUTH_TOKEN
+            {{- end }}
+            # Federation Support (for separate database deployments)
+            - name: BACKEND_TYPE
+              value: {{ .Values.api.env.backendType | default "primary" | quote }}
+            {{- if .Values.api.env.primaryBackendUrl }}
+            - name: PRIMARY_BACKEND_URL
+              value: {{ .Values.api.env.primaryBackendUrl | quote }}
+            {{- end }}
+            {{- if .Values.api.env.primaryBackendVerifyTls }}
+            - name: PRIMARY_BACKEND_VERIFY_TLS
+              value: {{ .Values.api.env.primaryBackendVerifyTls | quote }}
+            {{- end }}
+            # Trivy Scanner
+            {{- if .Values.api.env.trivyUrl }}
+            - name: TRIVY_URL
+              value: {{ .Values.api.env.trivyUrl | quote }}
+            {{- else if .Values.trivy.enabled }}
+            - name: TRIVY_URL
+              value: "http://{{ include "patchmgmt.fullname" . }}-trivy:{{ .Values.trivy.service.port }}"
+            {{- end }}
+            {{- if .Values.api.env.trivySkipTlsVerify }}
+            - name: TRIVY_VERIFY
+              value: {{ ternary "\"false\"" "\"true\"" (eq (toString .Values.api.env.trivySkipTlsVerify) "true") }}
+            {{- end }}
+            # EOL Integration
+            {{- if .Values.api.env.eolApiUrl }}
+            - name: EOL_API_URL
+              value: {{ .Values.api.env.eolApiUrl | quote }}
+            {{- end }}
+            # Deployment-specific registry / manifest handling (optional)
+            {{- if .Values.api.env.privateRegistryHost }}
+            - name: PRIVATE_REGISTRY_HOST
+              value: {{ .Values.api.env.privateRegistryHost | quote }}
+            {{- end }}
+            {{- if .Values.api.env.registryDockerhubPrefixes }}
+            - name: REGISTRY_DOCKERHUB_PREFIXES
+              value: {{ .Values.api.env.registryDockerhubPrefixes | quote }}
+            {{- end }}
+            {{- if .Values.api.env.manifestStripAnnotationPrefixes }}
+            - name: MANIFEST_STRIP_ANNOTATION_PREFIXES
+              value: {{ .Values.api.env.manifestStripAnnotationPrefixes | quote }}
+            {{- end }}
+            # SMTP Integration
+            {{- if .Values.api.env.smtpServer }}
+            - name: SMTP_SERVER
+              value: {{ .Values.api.env.smtpServer | quote }}
+            {{- end }}
+            {{- if .Values.api.env.smtpPort }}
+            - name: SMTP_PORT
+              value: {{ .Values.api.env.smtpPort | quote }}
+            {{- end }}
+            {{- if .Values.api.env.smtpFromEmail }}
+            - name: SMTP_FROM_EMAIL
+              value: {{ .Values.api.env.smtpFromEmail | quote }}
+            {{- end }}
+            {{- if .Values.api.env.smtpUsername }}
+            - name: SMTP_USERNAME
+              value: {{ .Values.api.env.smtpUsername | quote }}
+            {{- end }}
+            {{- if .Values.api.env.smtpPassword }}
+            - name: SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "patchmgmt.fullname" . }}-smtp
+                  key: SMTP_PASSWORD
+            {{- end }}
+            {{- if .Values.api.env.smtpUseTls }}
+            - name: SMTP_USE_TLS
+              value: {{ .Values.api.env.smtpUseTls | quote }}
+            {{- end }}
+            {{- if .Values.api.env.smtpSchedule }}
+            - name: SMTP_SCHEDULE
+              value: {{ .Values.api.env.smtpSchedule | quote }}
+            {{- end }}
+            # Security Status Thresholds
+            - name: SECURITY_RED_RISK_FACTOR
+              value: {{ .Values.api.env.securityRedRiskFactor | default 10 | quote }}
+            - name: SECURITY_RED_CRITICAL
+              value: {{ .Values.api.env.securityRedCritical | default 0 | quote }}
+            - name: SECURITY_ORANGE_RISK_FACTOR_MIN
+              value: {{ .Values.api.env.securityOrangeRiskFactorMin | default 5 | quote }}
+            - name: SECURITY_ORANGE_RISK_FACTOR_MAX
+              value: {{ .Values.api.env.securityOrangeRiskFactorMax | default 10 | quote }}
+            - name: SECURITY_ORANGE_CRITICAL
+              value: {{ .Values.api.env.securityOrangeCritical | default 0 | quote }}
+            - name: SECURITY_GREEN_RISK_FACTOR
+              value: {{ .Values.api.env.securityGreenRiskFactor | default 5 | quote }}
+            - name: SECURITY_GREEN_CRITICAL
+              value: {{ .Values.api.env.securityGreenCritical | default 0 | quote }}
+            # Latest Version Check Configuration
+            - name: LATEST_VERSION_CHECK_MODE
+              value: {{ .Values.api.env.latestVersionCheckMode | default "local" | quote }}
+            - name: LATEST_VERSION_CACHE_HOURS
+              value: {{ .Values.api.env.latestVersionCacheHours | default 12 | quote }}
+            # Log Rotation
+            - name: LOG_MAX_SIZE_MB
+              value: {{ .Values.api.env.logMaxSizeMb | default 100 | quote }}
+            - name: LOG_BACKUP_COUNT
+              value: {{ .Values.api.env.logBackupCount | default 5 | quote }}
+            # Trivy CLI cache directory (persistent across restarts)
+            - name: TRIVY_CACHE_DIR
+              value: "/trivy-cache"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: sources
+              mountPath: {{ .Values.api.env.sourcesFile | quote }}
+              subPath: sources.txt
+              readOnly: true
+            - name: logs
+              mountPath: /logs
+            {{- if .Values.trivy.enabled }}
+            - name: trivy-cache
+              mountPath: /trivy-cache
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+        {{- if .Values.api.fluentbit.enabled }}
+        - name: fluentbit
+          image: {{ .Values.api.fluentbit.image | quote }}
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: logs
+              mountPath: /logs
+              readOnly: true
+            - name: fluentbit-config
+              mountPath: /fluent-bit/etc
+              readOnly: true
+          resources:
+            {{- toYaml .Values.api.fluentbit.resources | nindent 12 }}
+        {{- end }}
+      {{- with .Values.api.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.api.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.api.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: sources
+          configMap:
+            name: {{ include "patchmgmt.fullname" . }}-sources
+        - name: logs
+          emptyDir: {}
+        {{- if .Values.api.fluentbit.enabled }}
+        - name: fluentbit-config
+          configMap:
+            name: {{ include "patchmgmt.fullname" . }}-fluentbit-api
+        {{- end }}
+        {{- if .Values.trivy.enabled }}
+        - name: trivy-cache
+          persistentVolumeClaim:
+            claimName: {{ include "patchmgmt.fullname" . }}-trivy-cli-cache
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "patchmgmt.fullname" . }}-api
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "patchmgmt.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: {{ include "patchmgmt.fullname" . }}-api
+  ports:
+    - name: http
+      port: {{ .Values.api.service.port }}
+      targetPort: {{ .Values.api.service.targetPort }}
+      protocol: TCP
+

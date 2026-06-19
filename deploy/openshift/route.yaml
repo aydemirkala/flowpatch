@@ -1,0 +1,13 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: patchmgmt-api
+  namespace: patchmgmt
+spec:
+  to:
+    kind: Service
+    name: patchmgmt-api
+  port:
+    targetPort: http
+  tls:
+    termination: edge
