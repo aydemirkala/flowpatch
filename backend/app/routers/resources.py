@@ -723,6 +723,12 @@ def ask_ai_upgrade(
     si_new["llm_upgrade_advice"] = advice
     si_new["llm_upgrade_at"] = datetime.now(timezone.utc).isoformat()
     res.security_info = si_new
+    # Keep the grid's precomputed summary in sync with security_info.
+    try:
+        from ..services.refresh import build_resource_summary
+        res.sec_summary = build_resource_summary(si_new, res.image)
+    except Exception:
+        pass
     db.commit()
 
     return {"advice": advice, "cached": False}

@@ -1975,6 +1975,15 @@ class ImageUpdateService:
                 # Assign the new dict and flag as modified
                 resource.security_info = updated_security_info
                 flag_modified(resource, "security_info")
+                # Rebuild the compact grid summary so the Security badge (which reads
+                # sec_summary) reflects the new Twistlock/Trivy data — otherwise the
+                # grid shows a stale colour (e.g. green) while the details modal (live
+                # security_info) correctly shows CRITICAL.
+                try:
+                    from .refresh import build_resource_summary
+                    resource.sec_summary = build_resource_summary(updated_security_info, new_image)
+                except Exception:
+                    pass
             
             # Update main image and version fields
             resource.image = new_image

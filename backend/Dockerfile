@@ -31,6 +31,13 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 # Install trivy CLI for vulnerability scanning (client-server mode)
 # Pinned to v0.71.0 (keep in sync with the Trivy server image in values.yaml).
 # Note: avoid v0.69.4-v0.69.6 — those releases were compromised; v0.71.0 is clear.
+# TODO(security): trivy statically embeds containerd/v2 v2.3.1, which Twistlock
+# flags as CVE-2026-53488 / 53489 / 53492 (HIGH, fixed in containerd 2.3.2). As of
+# 2026-06-22 NO trivy release (incl. latest v0.71.2) bundles the patched containerd
+# yet, so there's nothing to bump to; and the CLI runs only as a thin --server
+# client here, so the vulnerable containerd paths aren't exercised (waived in
+# Twistlock). When a trivy release embeds containerd >= 2.3.2, bump this pin AND
+# charts/patchmgmt/values.yaml's `trivy.image` together, then rebuild + rescan.
 RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v0.71.0
 
 # ---- Runtime: minimal image, no compilers / no perl toolchain / no curl ----

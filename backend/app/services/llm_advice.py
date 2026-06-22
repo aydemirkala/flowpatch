@@ -420,6 +420,12 @@ def _background_generate(resource_id: int, resource_name: str, image: str,
                     si["llm_advice_at"] = datetime.now(timezone.utc).isoformat()
                     res.security_info = si
                     res.advice = advice
+                    # Keep the grid's precomputed summary in sync with security_info.
+                    try:
+                        from .refresh import build_resource_summary
+                        res.sec_summary = build_resource_summary(si, res.image)
+                    except Exception:
+                        pass
                     db.commit()
                     log_event("llm.advice.saved", resource=resource_name)
             finally:

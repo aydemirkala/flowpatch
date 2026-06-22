@@ -25,6 +25,10 @@ RUN apk add --no-cache "libcrypto3>=3.5.7" "libssl3>=3.5.7"
 # explicitly (rather than rely on the apk upgrade above, which the CI builder
 # does not reliably apply) so the build fails loudly if the fix is unavailable.
 RUN apk add --no-cache "libxml2>=2.13.9-r1"
+# CVE-2026-45186 (HIGH, expat XML parser — pulled in via fontconfig): pin the
+# patched expat. Same rationale as libxml2 above; the CI builder's apk upgrade
+# does not reliably apply it, so pin explicitly (fails loudly if unavailable).
+RUN apk add --no-cache "expat>=2.8.1-r0"
 # CVE-2026-5773 / CVE-2026-6276 (HIGH, libcurl): the nginx base image ships
 # curl + libcurl, but this static-serving frontend never uses them and nothing
 # else depends on them. Alpine has no fixed curl yet (latest is 8.19.0-r0), so
