@@ -3088,7 +3088,8 @@ def get_llm_advice_for_secondary(
 
     if advice_type == "eol_status":
         from ..services.llm_advice import generate_eol_status
-        result = generate_eol_status(product or resource_name, version or current_version, image)
+        result = generate_eol_status(product or resource_name, version or current_version, image,
+                                     latest_version=latest_version, version_diff=version_diff)
         if result and result.get("status"):
             return {"status": result["status"], "note": result.get("note", ""), "from_cache": False}
         return {"status": None, "note": ""}

@@ -80,6 +80,10 @@ DEFAULT_EOL_STATUS_PROMPT = (
     "such as '<vendor>/apisix' or '<vendor>/pmm-server', names the real product). "
     "If you cannot confidently identify the product or its lifecycle, answer UNKNOWN "
     "rather than guessing.\n"
+    "When a 'Latest available version' is given and it equals the running version, that "
+    "version is up to date — do NOT call it outdated for its version number; judge support "
+    "ONLY by the product's release lifecycle, and never invent a newer major line you are "
+    "unsure exists.\n"
     "Respond in EXACTLY this two-line format, nothing else:\n"
     "STATUS: <SUPPORTED|EOL|UNKNOWN>\n"
     "NOTE: <one concise sentence, max ~120 chars; do not invent version numbers>\n"
@@ -520,10 +524,13 @@ def _image_repo_hint(image: str) -> str:
     return "/".join(p for p in parts if p)
 
 
-def generate_eol_status(product_name: str, current_version: str, image: str = "") -> Optional[dict]:
+def generate_eol_status(product_name: str, current_version: str, image: str = "",
+                        latest_version: str = "", version_diff: str = "") -> Optional[dict]:
     """Ask the LLM whether `product_name` `current_version` is still supported upstream.
     `image` (optional) is the container image ref; its repository path disambiguates the
-    exact product when `product_name` is a generic vendor/chart name.
+    exact product when `product_name` is a generic vendor/chart name. `latest_version` /
+    `version_diff` (optional) give the app's own version tracking so the LLM doesn't flag an
+    already-latest release as outdated.
     Returns {'status': supported|eol|unknown, 'note': str} or None on failure."""
     cfg = _get_llm_config()
     if not cfg["enabled"] or not cfg["base_url"]:
@@ -532,11 +539,22 @@ def generate_eol_status(product_name: str, current_version: str, image: str = ""
         log_event("llm.eol.rate_limited", product=product_name)
         return None
     repo = _image_repo_hint(image)
+    ver_context = ""
+    if latest_version:
+        if (version_diff or "").lower() in ("", "same", "none"):
+            ver_context = (f"Latest available version: {latest_version} "
+                           "(the running version is already the latest available release — up to date).\n")
+        else:
+            ver_context = f"Latest available version: {latest_version}\n"
     user = (f"Product: {product_name}\n"
             f"Version: {current_version or 'unknown'}\n"
             + (f"Container image repository: {repo}\n" if repo else "")
+            + ver_context
             + "Identify the exact product (prefer the image repository path over the bare "
-              "product name), then judge whether this version is still supported/maintained upstream.")
+              "product name), then judge whether this version is still supported/maintained "
+              "upstream. If the running version already equals the latest available version, it "
+              "is up to date — do NOT call it outdated for its version number; base the "
+              "EOL/support judgement only on the product's lifecycle.")
     try:
         log_event("llm.eol.start", product=product_name, version=current_version)
         with httpx.Client(verify=False, timeout=60) as client:
@@ -568,12 +586,15 @@ def generate_eol_status(product_name: str, current_version: str, image: str = ""
 
 def _fetch_eol_status_from_primary(primary_url: str, auth_token: str,
                                    product_name: str, current_version: str,
-                                   image: str = "") -> Optional[dict]:
+                                   image: str = "", latest_version: str = "",
+                                   version_diff: str = "") -> Optional[dict]:
     """Secondary backends with llm_mode=primary: ask the primary to produce the status."""
     try:
         url = f"{primary_url.rstrip('/')}/api/federation/llm-advice"
         params = {"advice_type": "eol_status", "product": product_name,
-                  "version": current_version or "", "image": image or "", "resource_name": product_name}
+                  "version": current_version or "", "image": image or "",
+                  "latest_version": latest_version or "", "version_diff": version_diff or "",
+                  "resource_name": product_name}
         with httpx.Client(verify=False, timeout=60) as client:
             resp = client.get(url, params=params, headers={"X-Backend-Token": auth_token})
             if resp.status_code == 200:
@@ -620,13 +641,15 @@ def _apply_eol_status_to_resources(product_name: str, current_version: str,
 
 def _background_eol_status(product_name: str, current_version: str,
                            primary_url: Optional[str], auth_token: Optional[str],
-                           image: str = "") -> None:
+                           image: str = "", latest_version: str = "",
+                           version_diff: str = "") -> None:
     cache_key = f"eolllm:{product_name}:{current_version}"
     try:
         if primary_url and auth_token:
-            result = _fetch_eol_status_from_primary(primary_url, auth_token, product_name, current_version, image)
+            result = _fetch_eol_status_from_primary(primary_url, auth_token, product_name,
+                                                    current_version, image, latest_version, version_diff)
         else:
-            result = generate_eol_status(product_name, current_version, image)
+            result = generate_eol_status(product_name, current_version, image, latest_version, version_diff)
         if result and result.get("status"):
             _apply_eol_status_to_resources(product_name, current_version,
                                            result["status"], result.get("note", ""))
@@ -640,11 +663,13 @@ def _background_eol_status(product_name: str, current_version: str,
 def submit_eol_status_request(product_name: str, current_version: str,
                               primary_url: Optional[str] = None,
                               auth_token: Optional[str] = None,
-                              image: str = "") -> None:
+                              image: str = "", latest_version: str = "",
+                              version_diff: str = "") -> None:
     """Non-blocking: produce an LLM support status for a product+version with no public
     EOL data, and apply it to matching resources. For llm_mode=primary secondaries pass
     primary_url+auth_token (the primary's LLM is used); otherwise the local LLM is used.
-    `image` (optional) disambiguates the exact product from its repository path."""
+    `image` disambiguates the exact product; `latest_version`/`version_diff` give the app's
+    own version tracking so an already-latest release isn't flagged as outdated."""
     if not product_name:
         return
     if not primary_url:  # local mode needs an enabled local LLM
@@ -656,5 +681,6 @@ def submit_eol_status_request(product_name: str, current_version: str,
         if cache_key in _pending:
             return
         _pending.add(cache_key)
-    _get_executor().submit(_background_eol_status, product_name, current_version, primary_url, auth_token, image)
+    _get_executor().submit(_background_eol_status, product_name, current_version, primary_url,
+                           auth_token, image, latest_version, version_diff)
     log_event("llm.eol.submitted", product=product_name, version=current_version)

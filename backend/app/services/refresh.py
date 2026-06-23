@@ -1518,10 +1518,14 @@ def _do_refresh(db: Session, triggered_by: str, use_dynamic: bool, sync_log_id: 
                             if _purl and _ptok:
                                 llm_submit_eol_status(existing.product_name, current_version or "",
                                                       primary_url=_purl, auth_token=_ptok,
-                                                      image=existing.image or "")
+                                                      image=existing.image or "",
+                                                      latest_version=existing.latest_version or "",
+                                                      version_diff=existing.version_diff or "")
                         else:
                             llm_submit_eol_status(existing.product_name, current_version or "",
-                                                  image=existing.image or "")
+                                                  image=existing.image or "",
+                                                  latest_version=existing.latest_version or "",
+                                                  version_diff=existing.version_diff or "")
             except Exception:
                 pass
 
