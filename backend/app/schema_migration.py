@@ -525,6 +525,15 @@ def ensure_schema(engine: Engine) -> None:
                 conn.execute(text("ALTER TABLE resources ADD COLUMN eol_support_note varchar(512)"))
                 log_event("schema.migrate.add_column", table="resources", column="eol_support_note")
 
+            # resources.eol_support_at: timestamp of the LLM EOL status, for TTL expiry.
+            q_eol_support_at = text("""
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'resources' AND column_name = 'eol_support_at'
+            """)
+            if conn.execute(q_eol_support_at).scalar() is None:
+                conn.execute(text("ALTER TABLE resources ADD COLUMN eol_support_at timestamptz"))
+                log_event("schema.migrate.add_column", table="resources", column="eol_support_at")
+
             # Composite index for the per-resource history count (slim listing) and the
             # on-demand history fetch — both filter by resource_id and order by checked_at.
             q_hist_composite = text("""

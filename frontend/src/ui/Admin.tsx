@@ -5,6 +5,7 @@ type Row = { username: string; role: string }
 
 type EolConfig = {
   url?: string | null
+  ttl_days?: number
 }
 
 async function fetchEolConfig(): Promise<EolConfig> {
@@ -15,11 +16,12 @@ async function fetchEolConfig(): Promise<EolConfig> {
   return await resp.json()
 }
 
-async function saveEolConfig(url: string): Promise<void> {
+async function saveEolConfig(url: string, ttlDays: number): Promise<void> {
   const token = getAuthToken()
   if (!token) throw new Error('Not authenticated')
   const body = new URLSearchParams()
   body.set('url', url)
+  body.set('ttl_days', String(ttlDays))
   const resp = await fetch('/api/admin/eol', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/x-www-form-urlencoded' }, body })
   if (!resp.ok) throw new Error('Failed to save EOL config')
 }
@@ -35,6 +37,7 @@ export default function Admin(): JSX.Element {
   const [roleChoice, setRoleChoice] = useState<string>('read-only')
   const [resetFor, setResetFor] = useState<string>('')
   const [eolUrl, setEolUrl] = useState<string>('')
+  const [eolTtlDays, setEolTtlDays] = useState<number>(3)
   const [savingEol, setSavingEol] = useState<boolean>(false)
   const [eolLoaded, setEolLoaded] = useState<boolean>(false)
   const [autoSyncInterval, setAutoSyncInterval] = useState<string>('')
@@ -173,6 +176,7 @@ export default function Admin(): JSX.Element {
   useEffect(() => {
     fetchEolConfig().then(cfg => {
       setEolUrl(cfg.url || '')
+      setEolTtlDays(cfg.ttl_days ?? 3)
       setEolLoaded(true)
     }).catch(() => setEolLoaded(true))
   }, [])
@@ -261,7 +265,7 @@ export default function Admin(): JSX.Element {
   const onSaveEol = async () => {
     try {
       setSavingEol(true)
-      await saveEolConfig(eolUrl.trim())
+      await saveEolConfig(eolUrl.trim(), eolTtlDays)
       alert('EOL configuration saved')
     } catch (e) {
       alert('Failed to save EOL configuration')
@@ -1265,6 +1269,12 @@ export default function Admin(): JSX.Element {
         <div className="inputs" style={{ marginTop: 8 }}>
           <input className="input" style={{ minWidth: 360 }} placeholder="https://endoflife.date" value={eolUrl} onChange={e => setEolUrl(e.target.value)} />
           <button className={`btn${savingEol ? ' secondary' : ''}`} onClick={onSaveEol} disabled={savingEol}>{savingEol ? 'Saving...' : 'Save'}</button>
+        </div>
+        <p className="muted" style={{ marginTop: 12 }}>AI EOL status cache TTL (days) — how long an LLM-derived support status is kept before it is re-analyzed. Used only for products with no public EOL date.</p>
+        <div className="inputs" style={{ marginTop: 8 }}>
+          <input className="input" type="number" min={1} max={365} style={{ maxWidth: 120 }} value={eolTtlDays}
+            onChange={e => setEolTtlDays(Math.max(1, Math.min(365, parseInt(e.target.value) || 3)))} />
+          <span className="muted">days (default 3)</span>
         </div>
       </div>
 

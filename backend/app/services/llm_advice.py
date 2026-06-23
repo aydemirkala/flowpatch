@@ -600,11 +600,14 @@ def _apply_eol_status_to_resources(product_name: str, current_version: str,
             )
             if current_version:
                 q = q.filter(Resource.current_version == current_version)
+            from datetime import datetime as _dt, timezone as _tz
+            now = _dt.now(_tz.utc)
             updated = 0
             for res in q.all():
-                if res.eol_support_status != status or res.eol_support_note != note:
+                if res.eol_support_status != status or res.eol_support_note != note or res.eol_support_at is None:
                     res.eol_support_status = status
                     res.eol_support_note = note
+                    res.eol_support_at = now  # stamp for TTL expiry
                     updated += 1
             if updated:
                 db.commit()

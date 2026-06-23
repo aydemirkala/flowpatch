@@ -397,6 +397,19 @@ def build_resource_summary(security_info: Optional[dict], image: Optional[str] =
     return si or None
 
 
+def _eol_support_ttl_days(db: Session) -> int:
+    """How old the LLM-derived EOL support status may be before refresh re-queries it,
+    in days. Admin-configurable (ConfigKV 'eol_support_ttl_days'); default 3. Bounded 1..365."""
+    try:
+        from ..models import ConfigKV
+        row = db.query(ConfigKV).filter(ConfigKV.key == "eol_support_ttl_days").first()
+        if row and row.value not in (None, ""):
+            return max(1, min(365, int(row.value)))
+    except Exception:
+        pass
+    return 3
+
+
 def apply_trivy_to_resources(db: Session, image: str, report: Optional[dict]) -> int:
     """After a background Trivy scan finishes, merge its result into the
     `security_info` + `sec_summary` of resources on THIS backend that use `image`,
@@ -1480,6 +1493,22 @@ def _do_refresh(db: Session, triggered_by: str, use_dynamic: bool, sync_log_id: 
                     if existing.eol_support_status is not None and (existing.eol_support_note or "").lstrip().startswith("<"):
                         existing.eol_support_status = None
                         existing.eol_support_note = None
+                    # TTL expiry: re-query when the cached LLM EOL status is older than the
+                    # Admin-configurable window (default 3 days), or has no timestamp at all
+                    # (rows written before this column existed) — so a stale/incorrect guess
+                    # is refreshed with the current prompt instead of persisting forever.
+                    if existing.eol_support_status is not None:
+                        _stamp = existing.eol_support_at
+                        _expired = _stamp is None
+                        if _stamp is not None:
+                            try:
+                                _st = _stamp if _stamp.tzinfo else _stamp.replace(tzinfo=timezone.utc)
+                                _expired = (now - _st).total_seconds() > _eol_support_ttl_days(db) * 86400
+                            except Exception:
+                                _expired = False
+                        if _expired:
+                            existing.eol_support_status = None
+                            existing.eol_support_note = None
                     if existing.eol_support_status is None:
                         _llm_cfg_eol = get_llm_config(db)
                         if _llm_cfg_eol.get("mode") == "primary" and not is_primary_backend():

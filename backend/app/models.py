@@ -43,6 +43,10 @@ class Resource(Base):
     # security_info rebuild can't clobber them.
     eol_support_status: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     eol_support_note: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    # When the LLM EOL status above was last computed. Used to expire it after a TTL
+    # (Admin-configurable 'eol_support_ttl_days', default 3) so — unlike before — a
+    # stale/incorrect guess is re-queried instead of persisting forever.
+    eol_support_at: Mapped[Optional[str]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Cached manifest YAML for comparison (JSON format, cleaned of runtime fields)
     manifest_yaml: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)

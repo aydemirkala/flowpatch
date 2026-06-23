@@ -698,12 +698,17 @@ def get_eol_config(token: str = Depends(oauth2_scheme), db: Session = Depends(ge
     if _decode_role(token) != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
     row = db.query(ConfigKV).filter(ConfigKV.key == "eol_api_url").one_or_none()
-    return {"url": (row.value if row else None)}
+    return {
+        "url": (row.value if row else None),
+        # TTL after which the LLM-derived EOL support status is re-queried (default 3 days).
+        "ttl_days": int(_get_config(db, "eol_support_ttl_days", "3") or "3"),
+    }
 
 
 @router.post("/admin/eol")
 def set_eol_config(
     url: str = Form(""),
+    ttl_days: int = Form(3),
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -715,8 +720,11 @@ def set_eol_config(
         db.add(ConfigKV(key=key, value=(url or None)))
     else:
         row.value = (url or None)
+    # LLM EOL status TTL (days), bounded 1..365.
+    ttl_bounded = max(1, min(365, ttl_days))
+    _set_config(db, "eol_support_ttl_days", str(ttl_bounded))
     db.commit()
-    return {"ok": True, "url": (url or None)}
+    return {"ok": True, "url": (url or None), "ttl_days": ttl_bounded}
 
 
 @router.get("/admin/security-thresholds")
